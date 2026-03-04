@@ -1,0 +1,69 @@
+name: Build Android App
+
+on:
+  repository_dispatch:
+    types: [build-apk]
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Download project ZIP
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSET_URL=$(gh release view --json assets --jq '.assets[0].url' 2>/dev/null || echo "")
+          if [ -z "$ASSET_URL" ]; then
+            echo "No release asset found, using www/ directory if exists"
+            mkdir -p www
+          else
+            gh release download --pattern "*.zip" -D /tmp/
+            mkdir -p www
+            unzip /tmp/*.zip -d www/
+            # If extracted into a subdirectory, move files up
+            SUBDIRS=$(find www -mindepth 1 -maxdepth 1 -type d)
+            if [ $(echo "$SUBDIRS" | wc -l) -eq 1 ] && [ -n "$SUBDIRS" ]; then
+              mv "$SUBDIRS"/* www/ 2>/dev/null || true
+              mv "$SUBDIRS"/.* www/ 2>/dev/null || true
+              rmdir "$SUBDIRS" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Configure SDK versions
+        run: |
+          cd android/app
+          sed -i 's/minSdkVersion .*/minSdkVersion 24/' build.gradle
+          sed -i 's/targetSdkVersion .*/targetSdkVersion 33/' build.gradle
+      - name: Build APK
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: My App.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
